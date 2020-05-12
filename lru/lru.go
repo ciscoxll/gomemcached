@@ -1,116 +1,79 @@
 package lru
 
-import (
-	"container/list"
-)
+import "container/list"
 
-// Cache is a LRU cache. It is not safe concurrent access.
+// Cache is a LRU cache. It is not safe for concurrent access.
 type Cache struct {
 	maxBytes int64
-	nowBytes int64
-	ll *list.List
-	cache map[interface{}]*list.Element
-	// OnEvicted optionally specifies a callback function to be
-	// executed when an entry is purged from the cache.
-	OnEvicted func(key Key, value interface{})
+	nbytes   int64
+	ll       *list.List
+	cache    map[string]*list.Element
+	// optional and executed when an entry is purged.
+	OnEvicted func(key string, value Value)
 }
-
-// A Key may be any value that is comparable. See http://golang.org/ref/spec#Comparison_operators
-type Key interface{}
 
 type entry struct {
-	key Key
-	value interface{}
+	key   string
+	value Value
 }
 
-// New creates a new Cache.
-// If maxEntries is zero, the cache has no limit and it's assumed.
-// that eviction is done by the caller.
-func New(maxBytes int64) *Cache {
+// Value use Len to count how many bytes it takes
+type Value interface {
+	Len() int
+}
+
+// New is the Constructor of Cache
+func New(maxBytes int64, onEvicted func(string, Value)) *Cache {
 	return &Cache{
-		maxBytes: maxBytes,
-		ll: list.New(),
-		cache: make(map[interface{}]*list.Element),
+		maxBytes:  maxBytes,
+		ll:        list.New(),
+		cache:     make(map[string]*list.Element),
+		OnEvicted: onEvicted,
 	}
 }
 
 // Add adds a value to the cache.
-func (c *Cache) Add (key string, value interface{}) {
-	if c.cache == nil {
-		c.cache = make(map[interface{}]*list.Element)
-		c.ll = list.New()
+func (c *Cache) Add(key string, value Value) {
+	if ele, ok := c.cache[key]; ok {
+		c.ll.MoveToFront(ele)
+		kv := ele.Value.(*entry)
+		c.nbytes += int64(value.Len()) - int64(kv.value.Len())
+		kv.value = value
+	} else {
+		ele := c.ll.PushFront(&entry{key, value})
+		c.cache[key] = ele
+		c.nbytes += int64(len(key)) + int64(value.Len())
 	}
-
-	if ee, ok := c.cache[key]; ok {
-		c.ll.MoveToFront(ee)
-		ee.Value.(*entry).value = value
-		return
-	}
-
-	ele := c.ll.PushFront(&entry{key, value})
-	c.cache[key] = ele
-	if c.maxBytes != 0 && c.ll.Len() > c.maxBytes {
+	for c.maxBytes != 0 && c.maxBytes < c.nbytes {
 		c.RemoveOldest()
 	}
 }
 
-// Get looks up a key's value from the cache.
-func (c *Cache) Get(key string) (value interface{}, ok bool) {
-	if c.cache == nil {
-		return
-	}
+// Get look ups a key's value
+func (c *Cache) Get(key string) (value Value, ok bool) {
 	if ele, ok := c.cache[key]; ok {
 		c.ll.MoveToFront(ele)
-		return ele.Value.(*entry).value, true
+		kv := ele.Value.(*entry)
+		return kv.value, true
 	}
 	return
 }
 
-func (c *Cache) Remove(key Key) {
-	if c.cache == nil {
-		return
-	}
-
-	if ele, ok := c.cache[key]; ok {
-		c.removeElement(ele)
-	}
-}
-
-// RemoveOldest removes the oldest item from the cache.
-func (c *Cache) RemoveOldest() (e *list.Element) {
-	c.ll.Remove(e)
-	kv := e.Value.(*entry)
-	delete(c.cache, kv.key)
-	if c.OnEvicted != nil {
-		c.OnEvicted(kv.key, kv.value)
-	}
-}
-
-func (c *Cache) removeElement(e *list.Element) {
-	c.ll.Remove(e)
-	kv := e.Value.(*entry)
-	delete(c.cache, kv.key)
-	if c.OnEvicted != nil {
-		c.OnEvicted(kv.key, kv.value)
-	}
-}
-
-// Len returns the number of items in the cache.
-func (c *Cache) Len() int {
-	if c.cache == nil {
-		return 0;
-	}
-	return c.ll.Len()
-}
-
-// Clear purges all stored items from the cache.
-func (c *Cache) Clear() {
-	if c.OnEvicted != nil {
-		for _, e := range  c.cache {
-			kv := e.Value(*entry)
+// RemoveOldest removes the oldest item
+func (c *Cache) RemoveOldest() {
+	ele := c.ll.Back()
+	if ele != nil {
+		c.ll.Remove(ele)
+		kv := ele.Value.(*entry)
+		delete(c.cache, kv.key)
+		c.nbytes -= int64(len(kv.key)) + int64(kv.value.Len())
+		if c.OnEvicted != nil {
 			c.OnEvicted(kv.key, kv.value)
 		}
 	}
-	c.ll = nil
-	c.cache = nil
+}
+
+// Len the number of cache entries
+func (c *Cache) Len() int {
+	return c.ll.Len()
 }
