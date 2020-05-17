@@ -1,4 +1,4 @@
-package gomemcached
+package consistenthash
 
 import (
 	"strconv"
