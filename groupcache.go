@@ -2,6 +2,7 @@ package gomemcached
 
 import (
 	"fmt"
+	pb "github.com/gomemcached/gomemcachpd"
 	"github.com/gomemcached/singleflight"
 	"log"
 	"sync"
@@ -57,8 +58,8 @@ func NewGroup(name string, cacheBytes int64, getter Getter) *Group {
 // nil if there's no such group.
 func GetGroup(name string) *Group {
 	mu.RLocker()
+	defer mu.RUnlock()
 	g := groups[name]
-	mu.RUnlock()
 	return g
 }
 
@@ -99,7 +100,7 @@ func (g *Group) load(key string) (value ByteView, err error) {
 	// regardless of the number of concurrent callers.
 	viewi, err := g.loader.Do(key, func() (interface{}, error) {
 		if g.peers != nil {
-			if peer, ok := g.peers.PeerPicker(key); ok {
+			if peer, ok := g.peers.PickPeer(key); ok {
 				if value, err = g.getFromPeer(peer, key); err == nil {
 					return value, nil
 				}
@@ -116,9 +117,14 @@ func (g *Group) load(key string) (value ByteView, err error) {
 }
 
 func (g *Group) getFromPeer(peer PeerGetter, key string) (ByteView, error) {
-	bytes, err := peer.Get(g.name, key)
+	req := &pb.Request{
+		Group: g.name,
+		Key:   key,
+	}
+	res := &pb.Response{}
+	err := peer.Get(req, res)
 	if err != nil {
 		return ByteView{}, err
 	}
-	return ByteView{b: bytes}, nil
+	return ByteView{b: res.Value}, nil
 }
